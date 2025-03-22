@@ -42,6 +42,7 @@ localparam CYCLE_PER_BAUD = CLOCK_FREQ / BAUD_RATE;
 
 wire uart_finished;
 reg [7:0] byte_counter;
+reg uart_tx_r;
 
 // main status machine
 
@@ -119,6 +120,19 @@ always @(posedge axis_aclk) begin
 		
 		STATUS_UART_START: begin
 			baudrate_counter <= baudrate_counter + 32'b1;
+			case(1'b1)
+				(baudrate_counter < CYCLE_PER_BAUD*1): uart_tx_r <= 1'b0;
+				(baudrate_counter < CYCLE_PER_BAUD*2): uart_tx_r <= latched_axis_tdata[byte_counter][0];
+				(baudrate_counter < CYCLE_PER_BAUD*3): uart_tx_r <= latched_axis_tdata[byte_counter][1];
+				(baudrate_counter < CYCLE_PER_BAUD*4): uart_tx_r <= latched_axis_tdata[byte_counter][2];
+				(baudrate_counter < CYCLE_PER_BAUD*5): uart_tx_r <= latched_axis_tdata[byte_counter][3];
+				(baudrate_counter < CYCLE_PER_BAUD*6): uart_tx_r <= latched_axis_tdata[byte_counter][4];
+				(baudrate_counter < CYCLE_PER_BAUD*7): uart_tx_r <= latched_axis_tdata[byte_counter][5];
+				(baudrate_counter < CYCLE_PER_BAUD*8): uart_tx_r <= latched_axis_tdata[byte_counter][6];
+				(baudrate_counter < CYCLE_PER_BAUD*9): uart_tx_r <= latched_axis_tdata[byte_counter][7];
+				(baudrate_counter < CYCLE_PER_BAUD*10): uart_tx_r <= 1'b1;
+				default: uart_tx_r = 1'b1;
+			endcase
 		end
 		
 		STATUS_UART_END: begin
@@ -136,23 +150,6 @@ assign uart_finished = (baudrate_counter > CYCLE_PER_BAUD*(10+IDLE_BIT));
 
 assign axis_tready = (status_current == STATUS_IDLE);
 
-reg uart_tx_r;
 assign uart_tx = uart_tx_r;
-
-always @(*) begin
-	case(1'b1)
-		(baudrate_counter < CYCLE_PER_BAUD*1): uart_tx_r = 1'b0;
-		(baudrate_counter < CYCLE_PER_BAUD*2): uart_tx_r = latched_axis_tdata[byte_counter][0];
-		(baudrate_counter < CYCLE_PER_BAUD*3): uart_tx_r = latched_axis_tdata[byte_counter][1];
-		(baudrate_counter < CYCLE_PER_BAUD*4): uart_tx_r = latched_axis_tdata[byte_counter][2];
-		(baudrate_counter < CYCLE_PER_BAUD*5): uart_tx_r = latched_axis_tdata[byte_counter][3];
-		(baudrate_counter < CYCLE_PER_BAUD*6): uart_tx_r = latched_axis_tdata[byte_counter][4];
-		(baudrate_counter < CYCLE_PER_BAUD*7): uart_tx_r = latched_axis_tdata[byte_counter][5];
-		(baudrate_counter < CYCLE_PER_BAUD*8): uart_tx_r = latched_axis_tdata[byte_counter][6];
-		(baudrate_counter < CYCLE_PER_BAUD*9): uart_tx_r = latched_axis_tdata[byte_counter][7];
-		(baudrate_counter < CYCLE_PER_BAUD*10): uart_tx_r = 1'b1;
-		default: uart_tx_r = 1'b1;
-	endcase
-end
 
 endmodule
