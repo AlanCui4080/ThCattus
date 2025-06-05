@@ -189,16 +189,8 @@ localparam ACU_SEL_UGREATER = 4'd6;
 reg [31:0] inst_r;
 reg [31:0] inst_pc_r;
 
-wire    stage_ae0_forward_frozen;
-
-reg     stage_ma0_backward_frozen_r;
-wire    stage_ma0_backward_frozen;
-assign  stage_ma0_backward_frozen = stage_ma0_backward_frozen_r;
-
-reg     stage_if0_forward_frozen_r;
-wire    stage_if0_forward_frozen;
-assign  stage_if0_forward_frozen = stage_if0_forward_frozen_r;
-
+reg if0_bubble_r;
+wire stage_ae0_stall_if;
 always @(posedge processor_clk) begin
     if (!processor_resetn) begin
         instbus_haddr_r    <= 32'b0;
@@ -210,10 +202,18 @@ always @(posedge processor_clk) begin
         instbus_hwdata_r   <= 32'b0;
         inst_r             <= 32'b0;
         inst_pc_r          <= 32'b0;
-        stage_if0_forward_frozen_r <= 1'b1;
+        if0_bubble_r       <= 1;
     end else begin
-        if (stage_ma0_backward_frozen) begin
-            // bubble
+        if (stage_ae0_stall_if) begin
+            instbus_haddr_r    <= 32'b0;
+            instbus_htrans_r   <= BUS_HTRANS_IDLE;
+            instbus_hwrite_r   <= 1'b0;
+            instbus_hsize_r    <= 3'b0;
+            instbus_hbrust_r   <= 3'b0;
+            instbus_hprot_r    <= 4'b0;
+            instbus_hwdata_r   <= 32'b0;
+            inst_r             <= 32'b0;
+            inst_pc_r          <= 32'b0;
         end else begin
             if (instbus_htrans_r == BUS_HTRANS_IDLE) begin
                 instbus_haddr_r     <= reg_pc_r;
@@ -223,18 +223,17 @@ always @(posedge processor_clk) begin
                 instbus_hbrust_r    <= BUS_HBRUST_SINGLE;
                 instbus_hprot_r     <= 4'b0000; // not used
                 instbus_hwdata_r    <= 32'b0; // not used
-                
-                inst_pc_r           <= instbus_haddr_r;
-                stage_if0_forward_frozen_r <= 1;
+                if0_bubble_r <= 1;
             end else if (instbus_htrans_r == BUS_HTRANS_NONSEQ && instbus_hready == 1 && instbus_hresp == BUS_HRESP_OKAY ) begin
                 instbus_htrans_r    <= BUS_HTRANS_IDLE;
                 inst_r              <= instbus_hrdata;
-                stage_if0_forward_frozen_r <= 0;
+                inst_pc_r           <= instbus_haddr_r;
+                if0_bubble_r <= 0;
             end else if (instbus_htrans_r == BUS_HTRANS_NONSEQ && instbus_hready == 1 && instbus_hresp == BUS_HRESP_RETRY) begin
                 instbus_htrans_r    <= BUS_HTRANS_IDLE;
-                stage_if0_forward_frozen_r <= 1;
+                if0_bubble_r <= 1;
             end else begin
-                stage_if0_forward_frozen_r <= 1;
+                if0_bubble_r <= 1;
             end
         end
     end
@@ -255,6 +254,7 @@ reg [4:0]  alu_rs2regbypass_r; // bypass for store instructions
 reg [7:0]  alu_sel_r;
 reg [3:0]  acu_sel_r;
 
+reg id0_bubble_r;
 always @(posedge processor_clk) begin
     if (!processor_resetn) begin
         inst_id0_r           <= 32'b0;
@@ -266,14 +266,17 @@ always @(posedge processor_clk) begin
         alu_rs2regbypass_r   <= 5'b0;
         alu_sel_r            <= 8'b0;
         acu_sel_r            <= 4'b0;
+        id0_bubble_r         <= 1;
     end else begin
-        if (stage_if0_forward_frozen || stage_ma0_backward_frozen ) begin
-            // bubble and do nothing
+        id0_bubble_r <= 0;
+        alu_result_reg_sel_r <= inst_r[11:7];
+        alu_rs2regbypass_r   <= inst_r[24:20];
+        inst_id0_r           <= inst_r;
+        inst_pc_id0_r        <= inst_pc_r;
+        if (if0_bubble_r) begin
+            id0_bubble_r <= 1;
         end else begin
-            alu_result_reg_sel_r <= inst_r[11:7];
-            alu_rs2regbypass_r   <= inst_r[24:20];
-            inst_id0_r           <= inst_r;
-            inst_pc_id0_r        <= inst_pc_r;
+            $display("Info: Decoding instruction at PC=0x%x, INST=0x%x", inst_pc_r, inst_r);
             case(inst_r[6:0])
                 7'b0110111: begin // lui
                     alu_leftop_sel_r     <= ALU_OP_SEL_ZERO;
@@ -399,7 +402,6 @@ always @(posedge processor_clk) begin
                     endcase
                 end
                 default: begin
-                    $display("Warning: Invalid instruction at PC=0x%x, INST=0x%x, that may caused by zeros following a jump", inst_pc_r, inst_r);
                     alu_leftop_sel_r     <= ALU_OP_SEL_ZERO;
                     alu_leftop_sel_r     <= ALU_OP_SEL_ZERO;
                     alu_result_sel_r     <= ALU_RESULT_SEL_REG;
@@ -453,8 +455,11 @@ reg [4:0]  alu_rs2regbypass_id1_r; // bypass for store instructions
 reg [7:0]  alu_sel_id1_r;
 reg        acu_out_r;
 
+reg [31:0] inst_pc_id1_r;
+
 wire signed [31:0] backfeed_last_inst_result;
 
+reg id1_bubble_r;
 always @(posedge processor_clk) begin
     if (!processor_resetn) begin
     inst_leftop_r               <= 32'b0;
@@ -464,15 +469,18 @@ always @(posedge processor_clk) begin
     alu_rs2regbypass_id1_r      <= 5'b0;
     alu_sel_id1_r               <= 8'b0;
     acu_out_r                   <= 1'b0;
+    id1_bubble_r <= 1;
     end else begin
-        if (stage_if0_forward_frozen || stage_ma0_backward_frozen) begin
-            // bubble and do nothing
+        id1_bubble_r <= 0;
+        alu_result_sel_id1_r    <= alu_result_sel_r;
+        alu_result_reg_sel_id1_r<= alu_result_reg_sel_r;
+        alu_rs2regbypass_id1_r  <= alu_rs2regbypass_r;
+        alu_sel_id1_r           <= alu_sel_r;
+        acu_out_r               <= inst_id0_r[6:0] == 7'b1100011 ? acu_out : 1'b1;
+        inst_pc_id1_r           <= inst_pc_id0_r;
+        if (id0_bubble_r) begin
+            id1_bubble_r <= 1;
         end else begin
-            alu_result_sel_id1_r    <= alu_result_sel_r;
-            alu_result_reg_sel_id1_r<= alu_result_reg_sel_r;
-            alu_rs2regbypass_id1_r  <= alu_rs2regbypass_r;
-            alu_sel_id1_r           <= alu_sel_r;
-            acu_out_r               <= inst_id0_r[6:0] == 7'b1100011 ? acu_out : 1'b1;
             case (alu_leftop_sel_r)
                 ALU_OP_SEL_ZERO: inst_leftop_r <= 32'b0;
                 ALU_OP_SEL_REG:  inst_leftop_r <= inst_id0_r[19:15] == alu_result_reg_sel_id1_r ? backfeed_last_inst_result : regfile_out[inst_id0_r[19:15]];
@@ -523,37 +531,35 @@ always @(*) begin
     endcase
 end
 
-reg [3:0]   inst_flush_pipeline;
 reg [31:0]  inst_memory_address_r;
 reg [31:0]  inst_memory_data_r;     // when inst_memory_access=0, this field bypassed register data
 reg [4:0]   inst_memory_reg_sel_r;  // when inst_memory_access=0, this field bypassed register sel
 reg         inst_memory_write;
 reg         inst_memory_access;
 
-assign  stage_ae0_forward_frozen = inst_flush_pipeline != 0;
-
-localparam JUMP_FLUSH_CYCLE = 8;
+reg [3:0]   stage_ae0_stall_if_r;
+assign  stage_ae0_stall_if = stage_ae0_stall_if_r > 0;
 
 always @(posedge processor_clk) begin
     if (!processor_resetn) begin
-        inst_flush_pipeline         <= 4'b0;
+        stage_ae0_stall_if_r        <= 0;
         inst_memory_address_r       <= 32'b0;
         inst_memory_data_r          <= 32'b0;
         inst_memory_reg_sel_r       <= 5'b0;
         inst_memory_write           <= 1'b0;
         inst_memory_access          <= 1'b0;
+        reg_pc_r                    <= 1'b0;
     end else begin
-        if (stage_if0_forward_frozen || stage_ma0_backward_frozen || stage_ae0_forward_frozen) begin
+        if (id1_bubble_r || stage_ae0_stall_if) begin
             // bubble and do nothing
             inst_memory_access      <= 0;
             inst_memory_reg_sel_r   <= 0;
-            inst_memory_data_r      <= 32'hDEADBEEF;
-            inst_memory_address_r   <= 32'hDEADBEEF;
+            inst_memory_data_r      <= 32'h0B0BB1E; // aka. BUBBLE
+            inst_memory_address_r   <= 32'h0B0BB1E;
             
-            if (inst_flush_pipeline > 0) begin
-                inst_flush_pipeline = inst_flush_pipeline - 4'b1;
+            if (stage_ae0_stall_if) begin
+                stage_ae0_stall_if_r <= stage_ae0_stall_if_r - 1;
             end 
-            
         end else begin
             case (alu_result_sel_id1_r)
                 ALU_RESULT_SEL_REG: begin
@@ -564,18 +570,20 @@ always @(posedge processor_clk) begin
                 end
                 ALU_RESULT_SEL_PC: begin
                     if (acu_out_r) begin
+                        $display("Info: ALU_RESULT_SEL_PC to %x", inst_result);
                         reg_pc_r                <= inst_result;
-                        inst_flush_pipeline     <= JUMP_FLUSH_CYCLE; // wait for new instruction arrived
+                        stage_ae0_stall_if_r    <= 3; // flush the pipeline
                     end else begin
-                        reg_pc_r                <= reg_pc_r + 4;
+                        reg_pc_r                <= inst_pc_id1_r + 4;
                     end
                     inst_memory_reg_sel_r   <= 0;
                     inst_memory_access      <= 0;
                 end
                 ALU_RESULT_SEL_PCREG: begin
+                    $display("Info: ALU_RESULT_SEL_PCREG to %x", inst_result);
                     reg_pc_r                <= inst_result;
-                    inst_flush_pipeline     <= JUMP_FLUSH_CYCLE;
-                    inst_memory_data_r      <= inst_result + 4;
+                    stage_ae0_stall_if_r    <= 3; // flush the pipeline
+                    inst_memory_data_r      <= inst_pc_id1_r + 4; // Use original PC+4
                     inst_memory_reg_sel_r   <= alu_result_reg_sel_id1_r;
                     inst_memory_access      <= 0;
                 end
@@ -612,7 +620,6 @@ always @(posedge processor_clk) begin
         databus_hbrust_r            <= 3'b0;
         databus_hprot_r             <= 4'b0;
         databus_hwdata_r            <= 32'b0;
-        stage_ma0_backward_frozen_r <= 1'b0;
     end else begin
         if (0) begin // bubble statement is present on arithmeticexecution0
             // bubble and do nothing
@@ -627,17 +634,14 @@ always @(posedge processor_clk) begin
                 databus_hbrust_r    <= BUS_HBRUST_SINGLE;
                 databus_hprot_r     <= 4'b0000; // not used
                 databus_hwdata_r    <= inst_memory_data_r; // not used
-                stage_ma0_backward_frozen_r <= 1;
             end else if (databus_htrans_r == BUS_HTRANS_NONSEQ && databus_hready == 1) begin
                 databus_htrans_r    <= BUS_HTRANS_IDLE;
                 if (databus_hresp == BUS_HRESP_OKAY) begin
                     if (!inst_memory_write) begin
                         regfile_r[inst_memory_reg_sel_r] <= databus_hrdata;
                     end
-                stage_ma0_backward_frozen_r <= 0;
                 end else begin
                     databus_htrans_r    <= BUS_HTRANS_IDLE;
-                    stage_ma0_backward_frozen_r <= 1;
                 end
             end else begin
                 // register access channel
